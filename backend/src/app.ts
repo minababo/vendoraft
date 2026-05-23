@@ -4,6 +4,7 @@ import authRouter from './routes/auth';
 import categoriesRouter from './routes/categories';
 import productsRouter from './routes/products';
 import stockRouter from './routes/stock';
+import salesRouter from './routes/sales';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -15,6 +16,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/categories', categoriesRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/stock', stockRouter);
+app.use('/api/sales', salesRouter);
 
 app.use(errorHandler);
 

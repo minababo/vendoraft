@@ -76,7 +76,9 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     orderBy: { [orderField]: orderDir },
   });
 
-  res.status(200).json(products);
+  res.status(200).json(
+    products.map((p) => ({ ...p, lowStock: p.stockQty < p.lowStockThreshold })),
+  );
 });
 
 router.get('/:id', async (req: Request, res: Response): Promise<void> => {

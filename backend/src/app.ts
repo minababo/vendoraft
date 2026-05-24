@@ -5,6 +5,8 @@ import categoriesRouter from './routes/categories';
 import productsRouter from './routes/products';
 import stockRouter from './routes/stock';
 import salesRouter from './routes/sales';
+import reportsRouter from './routes/reports';
+import dashboardRouter from './routes/dashboard';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -17,6 +19,8 @@ app.use('/api/categories', categoriesRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/stock', stockRouter);
 app.use('/api/sales', salesRouter);
+app.use('/api/reports', reportsRouter);
+app.use('/api/dashboard', dashboardRouter);
 
 app.use(errorHandler);
 

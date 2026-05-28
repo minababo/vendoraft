@@ -14,6 +14,7 @@ import {
   ArrowLeftRight,
   ShoppingCart,
   BarChart2,
+  Settings,
   UserCircle,
   LogOut,
   Menu,
@@ -113,10 +114,24 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             })}
           </nav>
 
-          {/* Footer: user + logout */}
+          {/* Footer: settings + user + logout */}
           <div className="px-3 pb-4 pt-3">
+            <div className="mb-1 border-t border-slate-700/60 pt-3">
+              <Link
+                href="/settings"
+                onClick={() => setIsSidebarOpen(false)}
+                className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                  pathname === '/settings'
+                    ? 'border-l-2 border-rose-500 bg-slate-800 text-white'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <Settings size={16} className="shrink-0" />
+                Settings
+              </Link>
+            </div>
             {user?.email && (
-              <div className="mb-2 flex items-center gap-2 px-2 py-1.5">
+              <div className="mt-2 flex items-center gap-2 px-2 py-1.5">
                 <UserCircle size={15} className="shrink-0 text-slate-500" />
                 <span className="truncate text-xs text-slate-400">{user.email}</span>
               </div>

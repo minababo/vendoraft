@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatLKR, formatQty } from '@/lib/utils/formatLKR';
 import { showSuccess } from '@/lib/utils/toast';
-import { Package, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { Package, ChevronUp, ChevronDown, ChevronsUpDown, X } from 'lucide-react';
 import { TableSkeleton } from '@/components/ui/TableSkeleton';
 import { useSort } from '@/lib/hooks/useSort';
 import {
@@ -48,11 +48,14 @@ interface Product {
   categoryId: string;
 }
 
+import { MarginBadge } from '@/components/ui/MarginBadge';
+
 const PRODUCT_HEADERS: Array<{ label: string; key?: string; mobileHidden?: boolean }> = [
   { label: 'Name',      key: 'name' },
   { label: 'SKU',       key: 'sku',      mobileHidden: true },
   { label: 'Category',                   mobileHidden: true },
   { label: 'Price',     key: 'price',    mobileHidden: true },
+  { label: 'Margin',                     mobileHidden: true },
   { label: 'Stock Qty', key: 'stockQty' },
   { label: 'Status',                     mobileHidden: true },
   { label: 'Actions' },
@@ -148,7 +151,7 @@ export default function ProductsPage() {
     setModalOpen(true);
   }
 
-  return (
+return (
     <AppLayout>
       <div className="space-y-6">
         <div className="flex items-start justify-between">
@@ -160,7 +163,7 @@ export default function ProductsPage() {
         </div>
 
         {/* Filters */}
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Input
             placeholder="Search by name…"
             value={search}
@@ -180,6 +183,16 @@ export default function ProductsPage() {
               ))}
             </SelectContent>
           </Select>
+          {isFiltered && (
+            <Button
+              variant="ghost"
+              onClick={clearFilters}
+              className="gap-1.5 text-gray-500 hover:text-gray-800"
+            >
+              <X size={14} />
+              Clear filters
+            </Button>
+          )}
         </div>
 
         {loading && <TableSkeleton rows={5} cols={7} />}
@@ -228,7 +241,7 @@ export default function ProductsPage() {
               <tbody className="divide-y divide-gray-100">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center">
+                    <td colSpan={8} className="px-4 py-12 text-center">
                       <Package className="mx-auto mb-3 h-10 w-10 text-gray-300" />
                       <p className="font-medium text-gray-500">
                         {isFiltered ? 'No products match your filters' : 'No products found'}
@@ -252,6 +265,9 @@ export default function ProductsPage() {
                       <td className="hidden md:table-cell px-4 py-3 text-gray-500">{p.sku}</td>
                       <td className="hidden md:table-cell px-4 py-3 text-gray-500">{p.category.name}</td>
                       <td className="hidden md:table-cell px-4 py-3 text-gray-700">{formatLKR(p.price)}</td>
+                      <td className="hidden md:table-cell px-4 py-3 font-medium">
+                        <MarginBadge price={p.price} costPrice={p.costPrice} />
+                      </td>
                       <td className="px-4 py-3">
                         <span className={p.lowStock ? 'font-semibold text-red-600' : 'text-gray-900'}>
                           {formatQty(p.stockQty)}

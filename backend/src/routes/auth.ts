@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
+import { protect } from '../middleware/auth';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -40,6 +41,40 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       email: user.email,
     },
   });
+});
+
+router.put('/change-password', protect, async (req: Request, res: Response): Promise<void> => {
+  const { currentPassword, newPassword } = req.body;
+
+  if (!currentPassword || !newPassword) {
+    res.status(400).json({ error: 'currentPassword and newPassword are required' });
+    return;
+  }
+
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: 'New password must be at least 8 characters' });
+    return;
+  }
+
+  const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+  if (!user) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+
+  const match = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!match) {
+    res.status(400).json({ error: 'Current password is incorrect' });
+    return;
+  }
+
+  const newHash = await bcrypt.hash(newPassword, 10);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { passwordHash: newHash },
+  });
+
+  res.status(200).json({ message: 'Password updated successfully' });
 });
 
 export default router;

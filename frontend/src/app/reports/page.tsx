@@ -10,6 +10,7 @@ import { TableSkeleton, ChartSkeleton } from '@/components/ui/TableSkeleton';
 import { useSort } from '@/lib/hooks/useSort';
 import { downloadCSV } from '@/lib/utils/exportCSV';
 import { Button } from '@/components/ui/button';
+import { MarginBadge } from '@/components/ui/MarginBadge';
 import { Calendar } from '@/components/ui/calendar';
 import { format, parseISO } from 'date-fns';
 import {
@@ -24,6 +25,12 @@ import {
 interface ChartDay {
   date: string;
   revenue: number;
+}
+
+interface CategoryStat {
+  name: string;
+  totalRevenue: number;
+  itemsSold: number;
 }
 
 interface DailySale {
@@ -45,6 +52,7 @@ interface ValuationProduct {
   name: string;
   stockQty: number;
   costPrice: string;
+  price: string;
   value: string;
 }
 
@@ -64,7 +72,9 @@ const VALUATION_HEADERS: Array<{ label: string; key?: string }> = [
   { label: 'Stock Qty', key: 'stockQty' },
   { label: 'Cost Price (LKR)', key: 'costPrice' },
   { label: 'Value (LKR)', key: 'value' },
+  { label: 'Margin' },
 ];
+
 
 function todayISO() {
   const d = new Date();
@@ -136,6 +146,10 @@ export default function ReportsPage() {
   const [chartData, setChartData] = useState<ChartDay[]>([]);
   const [chartLoading, setChartLoading] = useState(true);
 
+  const [categorySales, setCategorySales] = useState<CategoryStat[]>([]);
+  const [catLoading, setCatLoading] = useState(true);
+  const [catError, setCatError] = useState('');
+
   // Sort state for each table — called unconditionally at the top level
   const { sorted: sortedSales, sortState: salesSort, handleSort: handleSalesSort } = useSort<DailySale>(report?.sales ?? []);
   const { sorted: sortedValProducts, sortState: valSort, handleSort: handleValSort } = useSort<ValuationProduct>(valuation?.products ?? []);
@@ -202,6 +216,54 @@ export default function ReportsPage() {
     }
 
     fetchWeekChart();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    async function fetchCategoryStats() {
+      setCatLoading(true);
+      setCatError('');
+      try {
+        const [salesRes, productsRes] = await Promise.all([
+          api.get('/api/sales'),
+          api.get('/api/products'),
+        ]);
+
+        const sales = salesRes.data as Array<{
+          voided: boolean;
+          saleItems: Array<{ productId: string; quantity: number; subtotal: string }>;
+        }>;
+
+        const products = productsRes.data as Array<{
+          id: string;
+          category: { name: string };
+        }>;
+
+        const catMap = new Map(products.map((p) => [p.id, p.category.name]));
+        const stats: Record<string, CategoryStat> = {};
+
+        for (const sale of sales) {
+          if (sale.voided) continue;
+          for (const item of sale.saleItems) {
+            const name = catMap.get(item.productId) ?? 'Uncategorized';
+            if (!stats[name]) stats[name] = { name, totalRevenue: 0, itemsSold: 0 };
+            stats[name].totalRevenue += Number(item.subtotal);
+            stats[name].itemsSold += item.quantity;
+          }
+        }
+
+        setCategorySales(
+          Object.values(stats).sort((a, b) => b.totalRevenue - a.totalRevenue),
+        );
+      } catch {
+        setCatError('Failed to load category sales data. Please try again.');
+      } finally {
+        setCatLoading(false);
+      }
+    }
+
+    fetchCategoryStats();
   }, [token]);
 
   function handleDaySelect(day: Date | undefined) {
@@ -414,7 +476,7 @@ export default function ReportsPage() {
             )}
           </div>
 
-          {valLoading && <TableSkeleton rows={4} cols={4} />}
+          {valLoading && <TableSkeleton rows={4} cols={5} />}
 
           {valError && (
             <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -460,6 +522,9 @@ export default function ReportsPage() {
                           <td className="px-4 py-3 text-gray-700">{formatQty(p.stockQty)}</td>
                           <td className="px-4 py-3 text-gray-700">{formatLKR(p.costPrice)}</td>
                           <td className="px-4 py-3 text-gray-700">{formatLKR(p.value)}</td>
+                          <td className="px-4 py-3 font-medium">
+                            <MarginBadge price={p.price} costPrice={p.costPrice} />
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -467,6 +532,91 @@ export default function ReportsPage() {
                 </div>
               )}
             </div>
+          )}
+        </div>
+        {/* Sales by Category */}
+        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-5 text-base font-semibold text-gray-800">Sales by Category</h2>
+
+          {catLoading && <TableSkeleton rows={4} cols={3} />}
+
+          {catError && (
+            <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {catError}
+            </div>
+          )}
+
+          {!catLoading && !catError && (
+            categorySales.length === 0 ? (
+              <p className="py-8 text-center text-sm text-gray-400">No sales data available.</p>
+            ) : (
+              <div className="space-y-6">
+                {/* Table */}
+                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                  <table className="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead className="bg-white">
+                      <tr>
+                        {['Category', 'Items Sold', 'Total Revenue'].map((h) => (
+                          <th
+                            key={h}
+                            className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {categorySales.map((cat) => (
+                        <tr key={cat.name} className="transition-colors hover:bg-gray-50">
+                          <td className="px-4 py-3 font-medium text-gray-900">{cat.name}</td>
+                          <td className="px-4 py-3 text-gray-700">{formatQty(cat.itemsSold)}</td>
+                          <td className="px-4 py-3 text-gray-700">{formatLKR(cat.totalRevenue)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Horizontal bar chart */}
+                <ResponsiveContainer width="100%" height={Math.max(200, categorySales.length * 48)}>
+                  <BarChart
+                    layout="vertical"
+                    data={categorySales}
+                    margin={{ top: 0, right: 16, bottom: 0, left: 0 }}
+                  >
+                    <XAxis
+                      type="number"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 11, fill: '#9ca3af' }}
+                      tickFormatter={(v: number) =>
+                        v === 0 ? '0' : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v))
+                      }
+                    />
+                    <YAxis
+                      type="category"
+                      dataKey="name"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 12, fill: '#6b7280' }}
+                      width={120}
+                    />
+                    <Tooltip
+                      cursor={{ fill: '#f3f4f6' }}
+                      formatter={(value) => [formatLKR(Number(value)), 'Revenue']}
+                      contentStyle={{
+                        fontSize: 12,
+                        borderRadius: 8,
+                        border: '1px solid #e5e7eb',
+                        boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+                      }}
+                    />
+                    <Bar dataKey="totalRevenue" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )
           )}
         </div>
       </div>

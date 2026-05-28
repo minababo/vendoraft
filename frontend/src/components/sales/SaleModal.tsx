@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import api from '@/lib/api';
 import { showSuccess } from '@/lib/utils/toast';
+import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -11,6 +12,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { ChevronsUpDown } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -22,6 +32,7 @@ import {
 interface Product {
   id: string;
   name: string;
+  sku: string;
   price: string;
   stockQty: number;
 }
@@ -45,8 +56,16 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
   const [stagingProductId, setStagingProductId] = useState('');
   const [stagingQty, setStagingQty] = useState('1');
   const [stagingError, setStagingError] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [comboboxOpen, setComboboxOpen] = useState(false);
+
+  const comboboxRef = useRef<HTMLDivElement>(null);
+  const commandContainerRef = useRef<HTMLDivElement>(null);
+  const qtyRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef('');
 
   useEffect(() => {
     if (open) {
@@ -55,13 +74,45 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
       setStagingQty('1');
       setStagingError('');
       setSubmitError('');
+      setCustomerName('');
+      setPaymentMethod('Cash');
+      setComboboxOpen(false);
     }
   }, [open]);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!comboboxOpen) return;
+    function handleMouseDown(e: MouseEvent) {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setComboboxOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [comboboxOpen]);
+
+  // Focus CommandInput when dropdown opens
+  useEffect(() => {
+    if (comboboxOpen) {
+      requestAnimationFrame(() => {
+        const input = commandContainerRef.current?.querySelector<HTMLInputElement>('[cmdk-input]');
+        input?.focus();
+      });
+    }
+  }, [comboboxOpen]);
 
   const runningTotal = items.reduce(
     (sum, item) => sum + item.unitPrice * item.quantity,
     0,
   );
+
+  function selectProduct(id: string) {
+    setStagingProductId(id);
+    setStagingError('');
+    setComboboxOpen(false);
+    requestAnimationFrame(() => qtyRef.current?.focus());
+  }
 
   function handleAddItem() {
     setStagingError('');
@@ -100,6 +151,7 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
 
     setStagingProductId('');
     setStagingQty('1');
+    setComboboxOpen(true);
   }
 
   function removeItem(index: number) {
@@ -119,6 +171,8 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
     try {
       await api.post('/api/sales', {
         items: items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
+        customerName: customerName.trim() || 'Walk-in',
+        paymentMethod,
       });
       showSuccess('Sale recorded successfully');
       onSuccess();
@@ -132,6 +186,8 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
       setSubmitLoading(false);
     }
   }
+
+  const selectedProduct = products.find((p) => p.id === stagingProductId);
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -174,6 +230,31 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
             </p>
           )}
 
+          {/* Customer name + payment method */}
+          <div className="flex gap-3">
+            <div className="flex-1 space-y-1.5">
+              <label className="text-xs font-medium text-gray-600">Customer Name</label>
+              <Input
+                placeholder="Walk-in"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+              />
+            </div>
+            <div className="w-40 space-y-1.5">
+              <label className="text-xs font-medium text-gray-600">Payment Method</label>
+              <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Cash">Cash</SelectItem>
+                  <SelectItem value="Card">Card</SelectItem>
+                  <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           {/* Running total */}
           {items.length > 0 && (
             <div className="flex justify-end text-sm">
@@ -187,28 +268,87 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
           {/* Staging row */}
           <div className="space-y-2">
             <div className="flex gap-2">
-              <Select
-                value={stagingProductId}
-                onValueChange={(v) => { setStagingProductId(v); setStagingError(''); }}
-              >
-                <SelectTrigger className="flex-1">
-                  <SelectValue placeholder="Select product" />
-                </SelectTrigger>
-                <SelectContent>
-                  {products.map((p) => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Inline combobox — rendered inside Dialog DOM to avoid focus-trap conflicts */}
+              <div ref={comboboxRef} className="relative flex-1">
+                <button
+                  type="button"
+                  onClick={() => setComboboxOpen((prev) => !prev)}
+                  className={cn(
+                    'flex h-9 w-full items-center justify-between rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background',
+                    'hover:bg-accent focus:outline-none focus:ring-1 focus:ring-ring',
+                    !selectedProduct && 'text-muted-foreground',
+                  )}
+                  aria-expanded={comboboxOpen}
+                >
+                  <span className="truncate">
+                    {selectedProduct ? selectedProduct.name : 'Select product...'}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </button>
+
+                {comboboxOpen && (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-md border border-gray-200 bg-white shadow-md">
+                    <div ref={commandContainerRef}>
+                      <Command>
+                        <CommandInput
+                          placeholder="Search product or scan barcode..."
+                          onValueChange={(v) => { searchRef.current = v; }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const match = products.find(
+                                (p) =>
+                                  p.sku.toLowerCase() === searchRef.current.toLowerCase() &&
+                                  p.stockQty > 0,
+                              );
+                              if (match) {
+                                e.preventDefault();
+                                selectProduct(match.id);
+                              }
+                            }
+                          }}
+                        />
+                        <CommandList className="max-h-52">
+                          <CommandEmpty>No products found.</CommandEmpty>
+                          <CommandGroup>
+                            {products.map((p) => (
+                              <CommandItem
+                                key={p.id}
+                                value={`${p.name} ${p.sku}`}
+                                disabled={p.stockQty === 0}
+                                onSelect={() => {
+                                  if (p.stockQty === 0) return;
+                                  selectProduct(p.id);
+                                }}
+                                className={cn(p.stockQty === 0 && 'opacity-40 cursor-not-allowed')}
+                              >
+                                <span className="flex-1 truncate">{p.name}</span>
+                                <span className="ml-2 shrink-0 text-xs text-gray-400">{p.sku}</span>
+                                <span
+                                  className={cn(
+                                    'ml-2 shrink-0 text-xs',
+                                    p.stockQty === 0 ? 'text-red-400' : 'text-gray-400',
+                                  )}
+                                >
+                                  {p.stockQty === 0 ? 'Out of stock' : `${p.stockQty} in stock`}
+                                </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               <Input
+                ref={qtyRef}
                 type="number"
                 min="1"
                 placeholder="Qty"
                 value={stagingQty}
                 onChange={(e) => { setStagingQty(e.target.value); setStagingError(''); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(); } }}
                 className="w-20"
               />
 

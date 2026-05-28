@@ -78,6 +78,46 @@ router.post('/out', async (req: Request, res: Response): Promise<void> => {
   res.status(201).json(movement);
 });
 
+router.post('/adjust', async (req: Request, res: Response): Promise<void> => {
+  const { productId, newQuantity, note } = req.body;
+
+  if (!productId) {
+    res.status(400).json({ error: 'productId is required' });
+    return;
+  }
+
+  if (newQuantity == null || typeof newQuantity !== 'number' || !Number.isInteger(newQuantity) || newQuantity < 0) {
+    res.status(400).json({ error: 'newQuantity must be an integer >= 0' });
+    return;
+  }
+
+  const product = await prisma.product.findUnique({ where: { id: productId } });
+  if (!product) {
+    res.status(404).json({ error: 'Product not found' });
+    return;
+  }
+
+  const delta = newQuantity - product.stockQty;
+
+  const movement = await prisma.$transaction(async (tx) => {
+    await tx.product.update({
+      where: { id: productId },
+      data: { stockQty: newQuantity },
+    });
+
+    return tx.stockMovement.create({
+      data: {
+        productId,
+        quantity: Math.abs(delta),
+        type: 'ADJUSTMENT',
+        note: note ?? 'Stock adjustment',
+      },
+    });
+  });
+
+  res.status(201).json(movement);
+});
+
 router.get('/movements', async (req: Request, res: Response): Promise<void> => {
   const { productId } = req.query;
 

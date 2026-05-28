@@ -9,22 +9,48 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Calendar } from '@/components/ui/calendar';
 import { formatLKR, formatQty } from '@/lib/utils/formatLKR';
-import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown, ShoppingCart, CalendarIcon, X, Printer } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, ChevronsUpDown, ShoppingCart, CalendarIcon, X, Printer, XCircle } from 'lucide-react';
+import { showSuccess } from '@/lib/utils/toast';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { TableSkeleton } from '@/components/ui/TableSkeleton';
 import { useSort } from '@/lib/hooks/useSort';
 import { usePagination } from '@/lib/hooks/usePagination';
 import { Pagination } from '@/components/ui/Pagination';
 import { format, parseISO } from 'date-fns';
 
+interface Category {
+  id: string;
+  name: string;
+}
+
 interface Product {
   id: string;
   name: string;
+  sku: string;
   price: string;
   stockQty: number;
+  categoryId: string;
 }
 
 interface SaleItem {
   id: string;
+  productId: string;
   quantity: number;
   unitPrice: string;
   subtotal: string;
@@ -35,8 +61,26 @@ interface Sale {
   id: string;
   referenceNo: string;
   totalAmount: string;
+  paymentMethod: string;
+  customerName: string;
+  voided: boolean;
+  voidedAt: string | null;
   createdAt: string;
   saleItems: SaleItem[];
+}
+
+const PAYMENT_BADGE: Record<string, string> = {
+  'Cash':          'bg-green-100 text-green-700',
+  'Card':          'bg-blue-100 text-blue-700',
+  'Bank Transfer': 'bg-purple-100 text-purple-700',
+};
+
+function PaymentBadge({ method }: { method: string }) {
+  return (
+    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${PAYMENT_BADGE[method] ?? 'bg-gray-100 text-gray-600'}`}>
+      {method}
+    </span>
+  );
 }
 
 function formatDate(iso: string) {
@@ -57,11 +101,15 @@ const CALENDAR_CLASSES = {
 
 const SALE_HEADERS: Array<{ label: string; key?: string; mobileHidden?: boolean }> = [
   { label: 'Reference No', key: 'referenceNo' },
+  { label: 'Customer',                          mobileHidden: true },
   { label: 'Date',         key: 'createdAt',   mobileHidden: true },
   { label: 'Items',                             mobileHidden: true },
+  { label: 'Payment',                           mobileHidden: true },
   { label: 'Total Amount', key: 'totalAmount' },
   { label: 'Actions' },
 ];
+
+type StatusFilter = 'all' | 'active' | 'voided';
 
 export default function SalesPage() {
   const { token } = useAuth();
@@ -70,15 +118,21 @@ export default function SalesPage() {
 
   const [sales, setSales] = useState<Sale[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [modalOpen, setModalOpen] = useState(false);
+  const [voidTarget, setVoidTarget] = useState<Sale | undefined>();
+  const [voidLoading, setVoidLoading] = useState(false);
+  const [voidError, setVoidError] = useState('');
 
   // Filters
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [fromOpen, setFromOpen] = useState(false);
   const [toOpen, setToOpen] = useState(false);
   const fromPickerRef = useRef<HTMLDivElement>(null);
@@ -97,7 +151,14 @@ export default function SalesPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [fromOpen, toOpen]);
 
-  const isFiltered = search !== '' || fromDate !== '' || toDate !== '';
+  const isFiltered = search !== '' || fromDate !== '' || toDate !== '' || categoryFilter !== 'all' || statusFilter !== 'all';
+
+  // productId → categoryId lookup built from the products list
+  const productCategoryMap = useMemo(() => {
+    const map = new Map<string, string>();
+    products.forEach((p) => map.set(p.id, p.categoryId));
+    return map;
+  }, [products]);
 
   const { sorted, sortState, handleSort } = useSort(sales);
 
@@ -114,9 +175,17 @@ export default function SalesPage() {
         end.setHours(23, 59, 59, 999);
         if (new Date(sale.createdAt) > end) return false;
       }
+      if (categoryFilter !== 'all') {
+        const hasCategory = sale.saleItems.some(
+          (item) => productCategoryMap.get(item.productId) === categoryFilter,
+        );
+        if (!hasCategory) return false;
+      }
+      if (statusFilter === 'active' && sale.voided) return false;
+      if (statusFilter === 'voided' && !sale.voided) return false;
       return true;
     });
-  }, [sorted, search, fromDate, toDate]);
+  }, [sorted, search, fromDate, toDate, categoryFilter, statusFilter, productCategoryMap]);
 
   const { paginated, page, totalPages, goNext, goPrev, goTo, hasNext, hasPrev } =
     usePagination(filtered, 15);
@@ -125,6 +194,8 @@ export default function SalesPage() {
     setSearch('');
     setFromDate('');
     setToDate('');
+    setCategoryFilter('all');
+    setStatusFilter('all');
   }
 
   const fetchSales = useCallback(async () => {
@@ -141,12 +212,14 @@ export default function SalesPage() {
 
     async function init() {
       try {
-        const [salesRes, productsRes] = await Promise.all([
+        const [salesRes, productsRes, categoriesRes] = await Promise.all([
           api.get('/api/sales'),
           api.get('/api/products'),
+          api.get('/api/categories'),
         ]);
         setSales(salesRes.data);
         setProducts(productsRes.data);
+        setCategories(categoriesRes.data);
       } catch {
         setError('Failed to load data. Please try again.');
       } finally {
@@ -226,6 +299,8 @@ export default function SalesPage() {
     </div>
     <p class="meta">Receipt: ${esc(sale.referenceNo)}</p>
     <p class="meta">Date: ${receiptDate}</p>
+    <p class="meta">Customer: ${esc(sale.customerName)}</p>
+    <p class="meta">Payment: ${esc(sale.paymentMethod)}</p>
     <hr class="divider" />
     <table>
       <thead><tr><th>Product</th><th>Qty</th><th>Unit</th><th>Sub</th></tr></thead>
@@ -245,6 +320,31 @@ export default function SalesPage() {
     win.document.close();
   }
 
+  async function handleVoid() {
+    if (!voidTarget) return;
+    setVoidLoading(true);
+    setVoidError('');
+    try {
+      await api.post(`/api/sales/${voidTarget.id}/void`);
+      setVoidTarget(undefined);
+      showSuccess('Sale voided — stock restored');
+      await fetchSales();
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? 'Something went wrong. Please try again.';
+      setVoidError(message);
+    } finally {
+      setVoidLoading(false);
+    }
+  }
+
+  const STATUS_TABS: { value: StatusFilter; label: string }[] = [
+    { value: 'all',    label: 'All' },
+    { value: 'active', label: 'Active' },
+    { value: 'voided', label: 'Voided' },
+  ];
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -256,7 +356,7 @@ export default function SalesPage() {
           <Button onClick={() => setModalOpen(true)}>Record Sale</Button>
         </div>
 
-        {loading && <TableSkeleton rows={5} cols={5} />}
+        {loading && <TableSkeleton rows={5} cols={7} />}
 
         {error && (
           <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -272,8 +372,21 @@ export default function SalesPage() {
                 placeholder="Search by reference no..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-64 bg-white"
+                className="w-56 bg-white"
               />
+
+              {/* Category filter */}
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger className="w-44 bg-white">
+                  <SelectValue placeholder="All Categories" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Categories</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
               {/* From date */}
               <div className="flex flex-col gap-1">
@@ -282,7 +395,7 @@ export default function SalesPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-[160px] justify-start text-left font-normal"
+                    className="w-[150px] justify-start text-left font-normal"
                     onClick={() => { setToOpen(false); setFromOpen((v) => !v); }}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4 text-gray-400" />
@@ -315,7 +428,7 @@ export default function SalesPage() {
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-[160px] justify-start text-left font-normal"
+                    className="w-[150px] justify-start text-left font-normal"
                     onClick={() => { setFromOpen(false); setToOpen((v) => !v); }}
                   >
                     <CalendarIcon className="mr-2 h-4 w-4 text-gray-400" />
@@ -339,6 +452,24 @@ export default function SalesPage() {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Status toggle */}
+              <div className="flex self-end overflow-hidden rounded-md border border-gray-200 bg-white text-sm">
+                {STATUS_TABS.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setStatusFilter(value)}
+                    className={`px-3 py-1.5 transition-colors ${
+                      statusFilter === value
+                        ? 'bg-slate-900 text-white'
+                        : 'text-gray-500 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
 
               {isFiltered && (
@@ -392,7 +523,7 @@ export default function SalesPage() {
                 <tbody className="divide-y divide-gray-100">
                   {paginated.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-4 py-12 text-center">
+                      <td colSpan={7} className="px-4 py-12 text-center">
                         <ShoppingCart className="mx-auto mb-3 h-10 w-10 text-gray-300" />
                         <p className="font-medium text-gray-500">
                           {isFiltered ? 'No sales match your filters' : 'No sales found'}
@@ -414,9 +545,15 @@ export default function SalesPage() {
                       const isOpen = expanded.has(sale.id);
                       const itemCount = sale.saleItems.length;
                       const rows = [
-                        <tr key={sale.id} className="transition-colors hover:bg-gray-50">
-                          <td className="px-4 py-3 font-mono text-sm text-gray-500">
+                        <tr
+                          key={sale.id}
+                          className={sale.voided ? 'bg-gray-50' : 'transition-colors hover:bg-gray-50'}
+                        >
+                          <td className={`px-4 py-3 font-mono text-sm ${sale.voided ? 'text-gray-400 line-through' : 'text-gray-500'}`}>
                             {sale.referenceNo}
+                          </td>
+                          <td className="hidden md:table-cell px-4 py-3 text-sm text-gray-600">
+                            {sale.customerName}
                           </td>
                           <td className="hidden md:table-cell px-4 py-3 text-gray-500">
                             {formatDate(sale.createdAt)}
@@ -424,18 +561,14 @@ export default function SalesPage() {
                           <td className="hidden md:table-cell px-4 py-3 text-gray-700">
                             {itemCount} {itemCount === 1 ? 'item' : 'items'}
                           </td>
-                          <td className="px-4 py-3 text-gray-700">
+                          <td className="hidden md:table-cell px-4 py-3">
+                            <PaymentBadge method={sale.paymentMethod} />
+                          </td>
+                          <td className={`px-4 py-3 ${sale.voided ? 'text-gray-400' : 'text-gray-700'}`}>
                             {formatLKR(sale.totalAmount)}
                           </td>
                           <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => toggleExpand(sale.id)}
-                                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800"
-                              >
-                                {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-                                {isOpen ? 'Hide' : 'Details'}
-                              </button>
+                            {sale.voided ? (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -445,7 +578,35 @@ export default function SalesPage() {
                                 <Printer size={13} />
                                 Print
                               </Button>
-                            </div>
+                            ) : (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => toggleExpand(sale.id)}
+                                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800"
+                                >
+                                  {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+                                  {isOpen ? 'Hide' : 'Details'}
+                                </button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => printReceipt(sale)}
+                                  className="h-auto gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-800"
+                                >
+                                  <Printer size={13} />
+                                  Print
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  title="Void this sale"
+                                  onClick={() => { setVoidError(''); setVoidTarget(sale); }}
+                                  className="h-auto px-2 py-1 text-red-400 hover:text-red-600"
+                                >
+                                  <XCircle size={15} />
+                                </Button>
+                              </div>
+                            )}
                           </td>
                         </tr>,
                       ];
@@ -454,7 +615,7 @@ export default function SalesPage() {
                         rows.push(
                           <tr key={`${sale.id}-details`}>
                             <td
-                              colSpan={5}
+                              colSpan={7}
                               className="border-t border-gray-100 bg-gray-50 px-8 pb-4 pt-3"
                             >
                               <table className="min-w-full text-sm">
@@ -524,6 +685,35 @@ export default function SalesPage() {
         onSuccess={fetchSales}
         products={products}
       />
+
+      <AlertDialog
+        open={!!voidTarget}
+        onOpenChange={(o) => { if (!o) { setVoidTarget(undefined); setVoidError(''); } }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Void Sale {voidTarget?.referenceNo}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will reverse all stock deductions for this sale. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {voidError && (
+            <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {voidError}
+            </p>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={voidLoading}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleVoid(); }}
+              disabled={voidLoading}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              {voidLoading ? 'Voiding…' : 'Void Sale'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   );
 }

@@ -12,6 +12,7 @@ import {
   Tag,
   ShoppingCart,
   TrendingUp,
+  TrendingDown,
   AlertTriangle,
   BarChart2,
   PackagePlus,
@@ -27,6 +28,10 @@ interface DashboardData {
   totalSalesToday: number;
   revenueToday: string;
   lowStockCount: number;
+}
+
+interface DailyReport {
+  totalRevenue: string;
 }
 
 interface Product {
@@ -62,9 +67,10 @@ interface StatCardProps {
   label: string;
   value: string | number;
   alert?: boolean;
+  trend?: React.ReactNode;
 }
 
-function StatCard({ icon, iconBg, iconColor, label, value, alert }: StatCardProps) {
+function StatCard({ icon, iconBg, iconColor, label, value, alert, trend }: StatCardProps) {
   return (
     <div
       className={`rounded-xl border bg-white p-6 shadow-sm ${
@@ -75,6 +81,7 @@ function StatCard({ icon, iconBg, iconColor, label, value, alert }: StatCardProp
         <div>
           <p className="text-sm text-gray-500">{label}</p>
           <p className="mt-1 text-2xl font-bold text-gray-900">{value}</p>
+          {trend && <div className="mt-1">{trend}</div>}
         </div>
         <div className={`rounded-lg p-2 ${iconBg}`}>
           <span className={iconColor}>{icon}</span>
@@ -92,6 +99,7 @@ export default function DashboardPage() {
   const [salesLoading, setSalesLoading] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [yesterdayRevenue, setYesterdayRevenue] = useState<number | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [, setTick] = useState(0);
 
@@ -107,17 +115,32 @@ export default function DashboardPage() {
 
     async function fetchData() {
       try {
-        const [dashRes, productsRes] = await Promise.all([
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yDate = yesterday.toISOString().split('T')[0];
+
+        const [dashRes, productsRes, yRes] = await Promise.allSettled([
           api.get('/api/dashboard'),
           api.get('/api/products'),
+          api.get(`/api/reports/daily?date=${yDate}`),
         ]);
-        setData(dashRes.data);
-        setLowStockProducts(
-          (productsRes.data as Product[]).filter((p) => p.lowStock),
-        );
-        setLastUpdated(new Date());
-      } catch {
-        setError('Failed to load dashboard data. Please try again.');
+
+        if (dashRes.status === 'fulfilled') {
+          setData(dashRes.value.data);
+          setLastUpdated(new Date());
+        } else {
+          setError('Failed to load dashboard data. Please try again.');
+        }
+
+        if (productsRes.status === 'fulfilled') {
+          setLowStockProducts(
+            (productsRes.value.data as Product[]).filter((p) => p.lowStock),
+          );
+        }
+
+        if (yRes.status === 'fulfilled') {
+          setYesterdayRevenue(Number((yRes.value.data as DailyReport).totalRevenue));
+        }
       } finally {
         setLoading(false);
       }
@@ -140,6 +163,27 @@ export default function DashboardPage() {
     data.totalProducts === 0 &&
     data.totalCategories === 0 &&
     data.totalSalesToday === 0;
+
+  const revenueTrend = (() => {
+    if (!data) return null;
+    const todayRev = Number(data.revenueToday);
+    const diff = yesterdayRevenue !== null ? todayRev - yesterdayRevenue : null;
+    if (diff === null || diff === 0) {
+      return <span className="text-xs text-gray-400">Same as yesterday</span>;
+    }
+    if (diff > 0) {
+      return (
+        <span className="flex items-center gap-1 text-xs text-green-600">
+          <TrendingUp className="h-3 w-3" />+{formatLKR(String(diff))} vs yesterday
+        </span>
+      );
+    }
+    return (
+      <span className="flex items-center gap-1 text-xs text-red-500">
+        <TrendingDown className="h-3 w-3" />-{formatLKR(String(Math.abs(diff)))} vs yesterday
+      </span>
+    );
+  })();
 
   return (
     <AppLayout>
@@ -215,6 +259,7 @@ export default function DashboardPage() {
                 iconColor="text-emerald-500"
                 label="Revenue Today"
                 value={formatLKR(data.revenueToday)}
+                trend={revenueTrend}
               />
               <StatCard
                 icon={<AlertTriangle size={20} />}
@@ -327,7 +372,7 @@ export default function DashboardPage() {
                             <td className="px-4 py-3 text-gray-600">
                               {sale.saleItems.length} item{sale.saleItems.length !== 1 ? 's' : ''}
                             </td>
-                            <td className="px-4 py-3 font-medium text-gray-900">
+                            <td className="px-4 py-3 text-gray-700">
                               {formatLKR(sale.totalAmount)}
                             </td>
                           </tr>

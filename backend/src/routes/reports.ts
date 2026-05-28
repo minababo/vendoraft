@@ -45,13 +45,13 @@ router.get('/daily', async (req: Request, res: Response): Promise<void> => {
 
 router.get('/valuation', async (_req: Request, res: Response): Promise<void> => {
   const products = await prisma.product.findMany({
-    select: { id: true, name: true, stockQty: true, costPrice: true },
+    select: { id: true, name: true, stockQty: true, costPrice: true, price: true },
     orderBy: { name: 'asc' },
   });
 
   const valued = products.map((p) => {
     const value = (p.stockQty * Number(p.costPrice)).toFixed(2);
-    return { id: p.id, name: p.name, stockQty: p.stockQty, costPrice: p.costPrice, value };
+    return { id: p.id, name: p.name, stockQty: p.stockQty, costPrice: p.costPrice, price: p.price, value };
   });
 
   const totalValue = valued

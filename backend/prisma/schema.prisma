@@ -10,6 +10,8 @@ datasource db {
 enum StockMovementType {
   IN
   OUT
+  ADJUSTMENT
+  VOID
 }
 
 model User {
@@ -54,11 +56,15 @@ model StockMovement {
 }
 
 model Sale {
-  id          String     @id @default(uuid())
-  referenceNo String     @unique
-  totalAmount Decimal    @db.Decimal(10, 2)
-  createdAt   DateTime   @default(now())
-  saleItems   SaleItem[]
+  id            String     @id @default(uuid())
+  referenceNo   String     @unique
+  totalAmount   Decimal    @db.Decimal(10, 2)
+  paymentMethod String     @default("Cash")
+  customerName  String     @default("Walk-in")
+  voided        Boolean    @default(false)
+  voidedAt      DateTime?
+  createdAt     DateTime   @default(now())
+  saleItems     SaleItem[]
 }
 
 model SaleItem {

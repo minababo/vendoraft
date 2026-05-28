@@ -66,9 +66,15 @@ router.delete('/:id', async (req: Request, res: Response): Promise<void> => {
     await prisma.category.delete({ where: { id: req.params.id } });
     res.status(200).json({ message: 'Category deleted' });
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2025') {
-      res.status(404).json({ error: 'Category not found' });
-      return;
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      if (e.code === 'P2025') {
+        res.status(404).json({ error: 'Category not found' });
+        return;
+      }
+      if (e.code === 'P2003') {
+        res.status(400).json({ error: 'Cannot delete category: products are assigned to it.' });
+        return;
+      }
     }
     throw e;
   }

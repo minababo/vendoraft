@@ -6,6 +6,10 @@ import api from '@/lib/api';
 import AppLayout from '@/components/layout/AppLayout';
 import CategoryModal from '@/components/categories/CategoryModal';
 import { Button } from '@/components/ui/button';
+import { showSuccess } from '@/lib/utils/toast';
+import { Tag, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+import { TableSkeleton } from '@/components/ui/TableSkeleton';
+import { useSort } from '@/lib/hooks/useSort';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -33,8 +37,16 @@ function formatDate(iso: string) {
   });
 }
 
+const CATEGORY_HEADERS: Array<{ label: string; key?: string; mobileHidden?: boolean }> = [
+  { label: 'Name',       key: 'name' },
+  { label: 'Created At', key: 'createdAt', mobileHidden: true },
+  { label: 'Actions' },
+];
+
 export default function CategoriesPage() {
   const { token } = useAuth();
+
+  useEffect(() => { document.title = 'Categories | Vendoraft'; }, []);
 
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,12 +83,15 @@ export default function CategoriesPage() {
     init();
   }, [token]);
 
+  const { sorted: sortedCategories, sortState, handleSort } = useSort(categories);
+
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleteLoading(true);
     setDeleteError('');
     try {
       await api.delete(`/api/categories/${deleteTarget.id}`);
+      showSuccess('Category deleted');
       setDeleteTarget(undefined);
       await fetchCategories();
     } catch {
@@ -99,16 +114,15 @@ export default function CategoriesPage() {
   return (
     <AppLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">Categories</h1>
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Categories</h1>
+            <p className="mt-1 text-sm text-gray-500">Organise products into categories</p>
+          </div>
           <Button onClick={openAdd}>Add Category</Button>
         </div>
 
-        {loading && (
-          <div className="flex items-center justify-center py-24">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-          </div>
-        )}
+        {loading && <TableSkeleton rows={5} cols={3} />}
 
         {error && (
           <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -117,32 +131,56 @@ export default function CategoriesPage() {
         )}
 
         {!loading && !error && (
-          <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="overflow-x-auto overflow-y-auto max-h-[600px] rounded-lg border border-gray-200 bg-white shadow-sm">
             <table className="min-w-full divide-y divide-gray-200 text-sm">
-              <thead className="bg-gray-50">
+              <thead className="sticky top-0 bg-white z-10 border-b border-gray-200">
                 <tr>
-                  {['Name', 'Created At', 'Actions'].map((h) => (
+                  {CATEGORY_HEADERS.map(({ label, key, mobileHidden }) => (
                     <th
-                      key={h}
-                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
+                      key={label}
+                      onClick={key ? () => handleSort(key) : undefined}
+                      className={`px-4 py-3 text-left text-xs uppercase tracking-wide font-semibold ${
+                        mobileHidden ? 'hidden md:table-cell' : ''
+                      } ${key ? 'cursor-pointer select-none' : ''} ${
+                        key && sortState.column === key && sortState.direction
+                          ? 'text-rose-600'
+                          : 'text-gray-500'
+                      }`}
                     >
-                      {h}
+                      {key ? (
+                        <span className="inline-flex items-center gap-1">
+                          {label}
+                          {sortState.column === key && sortState.direction ? (
+                            sortState.direction === 'asc'
+                              ? <ChevronUp size={13} />
+                              : <ChevronDown size={13} />
+                          ) : (
+                            <ChevronsUpDown size={13} className="text-gray-300" />
+                          )}
+                        </span>
+                      ) : (
+                        label
+                      )}
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {categories.length === 0 ? (
+                {sortedCategories.length === 0 ? (
                   <tr>
-                    <td colSpan={3} className="px-4 py-8 text-center text-gray-400">
-                      No categories found.
+                    <td colSpan={3} className="px-4 py-12 text-center">
+                      <Tag className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+                      <p className="font-medium text-gray-500">No categories found</p>
+                      <p className="mt-1 text-sm text-gray-400">
+                        Create a category to organise your products
+                      </p>
                     </td>
                   </tr>
                 ) : (
-                  categories.map((c) => (
-                    <tr key={c.id} className="hover:bg-gray-50">
+                  sortedCategories.map((c) => (
+                    <tr key={c.id} className="transition-colors hover:bg-gray-50">
                       <td className="px-4 py-3 font-medium text-gray-900">{c.name}</td>
-                      <td className="px-4 py-3 text-gray-500">{formatDate(c.createdAt)}</td>
+                      <td className="hidden md:table-cell px-4 py-3 text-gray-500">{formatDate(c.createdAt)}</td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">
                           <Button size="sm" variant="outline" onClick={() => openEdit(c)}>

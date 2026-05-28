@@ -30,7 +30,7 @@ interface Product {
 
 interface Movement {
   id: string;
-  type: 'IN' | 'OUT';
+  type: 'IN' | 'OUT' | 'ADJUSTMENT' | 'VOID';
   quantity: number;
   note: string | null;
   createdAt: string;
@@ -48,6 +48,7 @@ function formatDate(iso: string) {
 }
 
 const emptyForm = { productId: '', quantity: '', note: '' };
+const emptyAdjForm = { productId: '', newQuantity: '', note: '' };
 
 const MOVEMENT_HEADERS: Array<{ label: string; key?: string; mobileHidden?: boolean }> = [
   { label: 'Type',     key: 'type' },
@@ -72,10 +73,13 @@ export default function StockPage() {
 
   const [inForm, setInForm] = useState(emptyForm);
   const [outForm, setOutForm] = useState(emptyForm);
+  const [adjForm, setAdjForm] = useState(emptyAdjForm);
   const [inLoading, setInLoading] = useState(false);
   const [outLoading, setOutLoading] = useState(false);
+  const [adjLoading, setAdjLoading] = useState(false);
   const [inError, setInError] = useState('');
   const [outError, setOutError] = useState('');
+  const [adjError, setAdjError] = useState('');
 
   const fetchProducts = useCallback(async () => {
     try {
@@ -193,6 +197,38 @@ export default function StockPage() {
     }
   }
 
+  async function submitAdjustment() {
+    const qty = parseInt(adjForm.newQuantity);
+    if (adjForm.newQuantity === '' || isNaN(qty) || qty < 0) {
+      setAdjError('New quantity must be 0 or greater.');
+      return;
+    }
+    if (!adjForm.productId) {
+      setAdjError('Please select a product.');
+      return;
+    }
+    setAdjLoading(true);
+    setAdjError('');
+    try {
+      await api.post('/api/stock/adjust', {
+        productId: adjForm.productId,
+        newQuantity: qty,
+        note: adjForm.note || null,
+      });
+      setAdjForm(emptyAdjForm);
+      showSuccess('Stock adjusted successfully');
+      fetchMovements(productId);
+      fetchProducts();
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+        ?? 'Something went wrong. Please try again.';
+      setAdjError(message);
+    } finally {
+      setAdjLoading(false);
+    }
+  }
+
   return (
     <AppLayout>
       <div className="space-y-6">
@@ -201,8 +237,8 @@ export default function StockPage() {
           <p className="mt-1 text-sm text-gray-500">Record stock movements and view history</p>
         </div>
 
-        {/* Stock In / Out forms */}
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* Stock In / Out / Adjust forms */}
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           {/* Stock In */}
           <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-green-700">
@@ -298,6 +334,54 @@ export default function StockPage() {
               </Button>
             </form>
           </div>
+
+          {/* Stock Adjustment */}
+          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-indigo-700">
+              Stock Adjustment
+            </h2>
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitAdjustment();
+              }}
+            >
+              <Select
+                required
+                value={adjForm.productId}
+                onValueChange={(v) => setAdjForm((prev) => ({ ...prev, productId: v }))}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select product" />
+                </SelectTrigger>
+                <SelectContent>
+                  {products.map((p) => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                required
+                type="number"
+                min="0"
+                placeholder="New Quantity"
+                value={adjForm.newQuantity}
+                onChange={(e) => setAdjForm((prev) => ({ ...prev, newQuantity: e.target.value }))}
+              />
+              <Input
+                placeholder="e.g. Physical count"
+                value={adjForm.note}
+                onChange={(e) => setAdjForm((prev) => ({ ...prev, note: e.target.value }))}
+              />
+              {adjError && <p className="text-sm text-destructive">{adjError}</p>}
+              <Button type="submit" disabled={adjLoading} className="w-full bg-indigo-600 hover:bg-indigo-700">
+                {adjLoading ? 'Adjusting…' : 'Adjust Stock'}
+              </Button>
+            </form>
+          </div>
         </div>
 
         {/* Low stock alert */}
@@ -325,23 +409,12 @@ export default function StockPage() {
 
         {/* Filters */}
         <div className="flex items-center gap-3">
-          <div className="relative w-64">
-            <Input
-              placeholder="Search by product name or note..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pr-8"
-            />
-            {search && (
-              <button
-                onClick={() => setSearch('')}
-                aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
+          <Input
+            placeholder="Search by product name or note..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-64"
+          />
           <Select value={productId} onValueChange={handleProductChange}>
             <SelectTrigger className="w-56 bg-white">
               <SelectValue placeholder="All Products" />
@@ -355,6 +428,16 @@ export default function StockPage() {
               ))}
             </SelectContent>
           </Select>
+          {isFiltered && (
+            <Button
+              variant="ghost"
+              onClick={clearFilters}
+              className="gap-1.5 text-gray-500 hover:text-gray-800"
+            >
+              <X size={14} />
+              Clear filters
+            </Button>
+          )}
         </div>
 
         {loading && <TableSkeleton rows={5} cols={5} />}
@@ -427,13 +510,13 @@ export default function StockPage() {
                       <tr key={m.id} className="transition-colors hover:bg-gray-50">
                         <td className="px-4 py-3">
                           {m.type === 'IN' ? (
-                            <span className="inline-flex items-center rounded-md bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700">
-                              IN
-                            </span>
+                            <span className="inline-flex items-center rounded-md bg-green-100 px-2.5 py-0.5 text-xs font-semibold text-green-700">IN</span>
+                          ) : m.type === 'OUT' ? (
+                            <span className="inline-flex items-center rounded-md bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">OUT</span>
+                          ) : m.type === 'ADJUSTMENT' ? (
+                            <span className="inline-flex items-center rounded-md bg-blue-100 px-2.5 py-0.5 text-xs font-semibold text-blue-700">ADJ</span>
                           ) : (
-                            <span className="inline-flex items-center rounded-md bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">
-                              OUT
-                            </span>
+                            <span className="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-0.5 text-xs font-semibold text-gray-500">VOID</span>
                           )}
                         </td>
                         <td className="px-4 py-3 font-medium text-gray-900">{m.product.name}</td>

@@ -13,11 +13,18 @@ const saleInclude = {
   },
 } as const;
 
+const VALID_PAYMENT_METHODS = ['Cash', 'Card', 'Bank Transfer'] as const;
+
 router.post('/', async (req: Request, res: Response): Promise<void> => {
-  const { items } = req.body;
+  const { items, paymentMethod, customerName } = req.body;
 
   if (!Array.isArray(items) || items.length === 0) {
     res.status(400).json({ error: 'items must be a non-empty array' });
+    return;
+  }
+
+  if (paymentMethod !== undefined && !VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+    res.status(400).json({ error: `paymentMethod must be one of: ${VALID_PAYMENT_METHODS.join(', ')}` });
     return;
   }
 
@@ -69,6 +76,8 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
       data: {
         referenceNo,
         totalAmount,
+        paymentMethod: paymentMethod ?? 'Cash',
+        customerName: (customerName as string | undefined)?.trim() || 'Walk-in',
         saleItems: {
           create: resolvedItems.map((i) => ({
             productId: i.productId,
@@ -101,6 +110,53 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   });
 
   res.status(201).json(sale);
+});
+
+router.post('/:id/void', async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+
+  const sale = await prisma.sale.findUnique({
+    where: { id },
+    include: { saleItems: true },
+  });
+
+  if (!sale) {
+    res.status(404).json({ error: 'Sale not found' });
+    return;
+  }
+
+  if (sale.voided) {
+    res.status(400).json({ error: 'Sale is already voided' });
+    return;
+  }
+
+  const updatedSale = await prisma.$transaction(async (tx) => {
+    const voided = await tx.sale.update({
+      where: { id },
+      data: { voided: true, voidedAt: new Date() },
+      include: saleInclude,
+    });
+
+    for (const item of sale.saleItems) {
+      await tx.product.update({
+        where: { id: item.productId },
+        data: { stockQty: { increment: item.quantity } },
+      });
+
+      await tx.stockMovement.create({
+        data: {
+          productId: item.productId,
+          quantity: item.quantity,
+          type: 'VOID',
+          note: `Void: ${sale.referenceNo}`,
+        },
+      });
+    }
+
+    return voided;
+  });
+
+  res.status(200).json(updatedSale);
 });
 
 router.get('/', async (_req: Request, res: Response): Promise<void> => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
+import { showSuccess } from '@/lib/utils/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -105,8 +106,10 @@ export default function ProductModal({
     try {
       if (isEdit) {
         await api.put(`/api/products/${product.id}`, payload);
+        showSuccess('Product updated successfully');
       } else {
         await api.post('/api/products', payload);
+        showSuccess('Product created successfully');
       }
       onSuccess();
       onClose();

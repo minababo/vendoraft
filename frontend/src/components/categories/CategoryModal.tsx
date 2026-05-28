@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
+import { showSuccess } from '@/lib/utils/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -50,8 +51,10 @@ export default function CategoryModal({
     try {
       if (isEdit) {
         await api.put(`/api/categories/${category.id}`, { name });
+        showSuccess('Category updated successfully');
       } else {
         await api.post('/api/categories', { name });
+        showSuccess('Category created successfully');
       }
       onSuccess();
       onClose();

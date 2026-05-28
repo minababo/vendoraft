@@ -1,9 +1,30 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import api from '@/lib/api';
 import AppLayout from '@/components/layout/AppLayout';
+import { formatLKR, formatQty } from '@/lib/utils/formatLKR';
+import { ShoppingCart, Package, CalendarIcon, ChevronUp, ChevronDown, ChevronsUpDown, Download } from 'lucide-react';
+import { TableSkeleton, ChartSkeleton } from '@/components/ui/TableSkeleton';
+import { useSort } from '@/lib/hooks/useSort';
+import { downloadCSV } from '@/lib/utils/exportCSV';
+import { Button } from '@/components/ui/button';
+import { Calendar } from '@/components/ui/calendar';
+import { format, parseISO } from 'date-fns';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+} from 'recharts';
+
+interface ChartDay {
+  date: string;
+  revenue: number;
+}
 
 interface DailySale {
   id: string;
@@ -32,15 +53,78 @@ interface Valuation {
   products: ValuationProduct[];
 }
 
+const DAILY_SALE_HEADERS: Array<{ label: string; key?: string }> = [
+  { label: 'Reference No', key: 'referenceNo' },
+  { label: 'Items' },
+  { label: 'Total Amount', key: 'totalAmount' },
+];
+
+const VALUATION_HEADERS: Array<{ label: string; key?: string }> = [
+  { label: 'Product', key: 'name' },
+  { label: 'Stock Qty', key: 'stockQty' },
+  { label: 'Cost Price (LKR)', key: 'costPrice' },
+  { label: 'Value (LKR)', key: 'value' },
+];
+
 function todayISO() {
   const d = new Date();
   return d.toISOString().slice(0, 10);
+}
+
+function SortableHeader({
+  label,
+  sortKey,
+  sortState,
+  onSort,
+}: {
+  label: string;
+  sortKey?: string;
+  sortState: { column: string; direction: 'asc' | 'desc' | null };
+  onSort: (key: string) => void;
+}) {
+  const active = !!sortKey && sortState.column === sortKey && !!sortState.direction;
+  return (
+    <th
+      onClick={sortKey ? () => onSort(sortKey) : undefined}
+      className={`px-4 py-3 text-left text-xs uppercase tracking-wide font-semibold ${
+        sortKey ? 'cursor-pointer select-none' : ''
+      } ${active ? 'text-rose-600' : 'text-gray-500'}`}
+    >
+      {sortKey ? (
+        <span className="inline-flex items-center gap-1">
+          {label}
+          {active ? (
+            sortState.direction === 'asc' ? <ChevronUp size={13} /> : <ChevronDown size={13} />
+          ) : (
+            <ChevronsUpDown size={13} className="text-gray-300" />
+          )}
+        </span>
+      ) : (
+        label
+      )}
+    </th>
+  );
 }
 
 export default function ReportsPage() {
   const { token } = useAuth();
 
   const [date, setDate] = useState(todayISO());
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { document.title = 'Reports | Vendoraft'; }, []);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setCalendarOpen(false);
+      }
+    }
+    if (calendarOpen) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [calendarOpen]);
+
   const [report, setReport] = useState<DailyReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -48,6 +132,13 @@ export default function ReportsPage() {
   const [valuation, setValuation] = useState<Valuation | null>(null);
   const [valLoading, setValLoading] = useState(true);
   const [valError, setValError] = useState('');
+
+  const [chartData, setChartData] = useState<ChartDay[]>([]);
+  const [chartLoading, setChartLoading] = useState(true);
+
+  // Sort state for each table — called unconditionally at the top level
+  const { sorted: sortedSales, sortState: salesSort, handleSort: handleSalesSort } = useSort<DailySale>(report?.sales ?? []);
+  const { sorted: sortedValProducts, sortState: valSort, handleSort: handleValSort } = useSort<ValuationProduct>(valuation?.products ?? []);
 
   const fetchReport = useCallback(async (d: string) => {
     setLoading(true);
@@ -78,32 +169,162 @@ export default function ReportsPage() {
       .finally(() => setValLoading(false));
   }, [token]);
 
-  function handleDateChange(e: React.ChangeEvent<HTMLInputElement>) {
-    setDate(e.target.value);
+  useEffect(() => {
+    if (!token) return;
+
+    async function fetchWeekChart() {
+      const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const days: { iso: string; label: string }[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        days.push({
+          iso: d.toISOString().slice(0, 10),
+          label: DAY_ABBR[d.getDay()],
+        });
+      }
+
+      try {
+        const results = await Promise.all(
+          days.map((d) => api.get(`/api/reports/daily?date=${d.iso}`)),
+        );
+        setChartData(
+          results.map((res, idx) => ({
+            date: days[idx].label,
+            revenue: parseFloat(res.data.totalRevenue) || 0,
+          })),
+        );
+      } catch {
+        // chart is non-critical — silently leave empty
+      } finally {
+        setChartLoading(false);
+      }
+    }
+
+    fetchWeekChart();
+  }, [token]);
+
+  function handleDaySelect(day: Date | undefined) {
+    if (!day) return;
+    setDate(format(day, 'yyyy-MM-dd'));
+    setCalendarOpen(false);
+  }
+
+  function handleDailySalesCSV() {
+    if (!report) return;
+    downloadCSV(`vendoraft-sales-${date}.csv`, [
+      ['Reference No', 'Date', 'Items', 'Total Amount (LKR)'],
+      ...report.sales.map((sale) => [
+        sale.referenceNo,
+        report.date,
+        String(sale.saleItems.length),
+        sale.totalAmount,
+      ]),
+    ]);
+  }
+
+  function handleValuationCSV() {
+    if (!valuation) return;
+    downloadCSV(`vendoraft-valuation-${todayISO()}.csv`, [
+      ['Product', 'Stock Qty', 'Cost Price (LKR)', 'Value (LKR)'],
+      ...valuation.products.map((p) => [
+        p.name,
+        String(p.stockQty),
+        p.costPrice,
+        p.value,
+      ]),
+    ]);
   }
 
   return (
     <AppLayout>
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
+          <p className="mt-1 text-sm text-gray-500">Daily sales summaries and inventory valuation</p>
+        </div>
+
+        {/* Revenue — Last 7 Days */}
+        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-5 text-base font-semibold text-gray-800">Revenue — Last 7 Days</h2>
+
+          {chartLoading ? (
+            <ChartSkeleton />
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={chartData} barCategoryGap="35%">
+                <XAxis
+                  dataKey="date"
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 12, fill: '#6b7280' }}
+                />
+                <YAxis
+                  axisLine={false}
+                  tickLine={false}
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  tickFormatter={(v: number) =>
+                    v === 0 ? '0' : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(v)
+                  }
+                  width={40}
+                />
+                <Tooltip
+                  cursor={{ fill: '#f3f4f6' }}
+                  formatter={(value) => [formatLKR(Number(value)), 'Revenue']}
+                  contentStyle={{
+                    fontSize: 12,
+                    borderRadius: 8,
+                    border: '1px solid #e5e7eb',
+                    boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
+                  }}
+                />
+                <Bar dataKey="revenue" fill="#e11d48" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
 
         {/* Daily Sales Report */}
         <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
           <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
-            <h2 className="text-base font-semibold text-gray-800">Daily Sales Report</h2>
-            <input
-              type="date"
-              value={date}
-              onChange={handleDateChange}
-              className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 shadow-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
-            />
+            <div className="flex items-center gap-3">
+              <h2 className="text-base font-semibold text-gray-800">Daily Sales Report</h2>
+              {!loading && !error && report && report.salesCount > 0 && (
+                <Button variant="outline" size="sm" onClick={handleDailySalesCSV}>
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Download CSV
+                </Button>
+              )}
+            </div>
+            <div ref={pickerRef} className="relative">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-[180px] justify-start text-left font-normal"
+                onClick={() => setCalendarOpen((v) => !v)}
+              >
+                <CalendarIcon className="mr-2 h-4 w-4 text-gray-400" />
+                {format(parseISO(date), 'dd MMM yyyy')}
+              </Button>
+              {calendarOpen && (
+                <div className="absolute right-0 top-full z-50 mt-1 w-80 rounded-lg border border-gray-200 bg-white p-4 shadow-lg">
+                  <Calendar
+                    mode="single"
+                    selected={parseISO(date)}
+                    onSelect={handleDaySelect}
+                    className="w-full"
+                    classNames={{
+                      weekday: 'flex-1 py-2 text-center text-xs font-medium text-gray-400',
+                      week: 'flex w-full',
+                      day: 'flex-1 aspect-square',
+                    }}
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
-          {loading && (
-            <div className="flex items-center justify-center py-12">
-              <div className="h-7 w-7 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            </div>
-          )}
+          {loading && <TableSkeleton rows={4} cols={3} />}
 
           {error && (
             <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -116,53 +337,52 @@ export default function ReportsPage() {
               {/* Summary row */}
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div className="rounded-md bg-gray-50 px-4 py-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
-                    Date
-                  </p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Date</p>
                   <p className="mt-1 text-sm font-semibold text-gray-800">{report.date}</p>
                 </div>
                 <div className="rounded-md bg-gray-50 px-4 py-3">
                   <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
                     Total Sales
                   </p>
-                  <p className="mt-1 text-sm font-semibold text-gray-800">
-                    {report.salesCount}
-                  </p>
+                  <p className="mt-1 text-sm font-semibold text-gray-800">{report.salesCount}</p>
                 </div>
                 <div className="rounded-md bg-gray-50 px-4 py-3">
                   <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
                     Total Revenue
                   </p>
                   <p className="mt-1 text-sm font-semibold text-gray-800">
-                    LKR {report.totalRevenue}
+                    {formatLKR(report.totalRevenue)}
                   </p>
                 </div>
               </div>
 
               {/* Sales table or empty state */}
               {report.salesCount === 0 ? (
-                <p className="py-6 text-center text-sm text-gray-400">
-                  No sales recorded for this date.
-                </p>
+                <div className="py-12 text-center">
+                  <ShoppingCart className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+                  <p className="font-medium text-gray-500">No sales on this date</p>
+                  <p className="mt-1 text-sm text-gray-400">Try selecting a different date</p>
+                </div>
               ) : (
-                <div className="overflow-hidden rounded-lg border border-gray-200">
+                <div className="overflow-x-auto overflow-y-auto max-h-[600px] rounded-lg border border-gray-200">
                   <table className="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead className="bg-gray-50">
+                    <thead className="sticky top-0 bg-white z-10 border-b border-gray-200">
                       <tr>
-                        {['Reference No', 'Items', 'Total Amount'].map((h) => (
-                          <th
-                            key={h}
-                            className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
-                          >
-                            {h}
-                          </th>
+                        {DAILY_SALE_HEADERS.map(({ label, key }) => (
+                          <SortableHeader
+                            key={label}
+                            label={label}
+                            sortKey={key}
+                            sortState={salesSort}
+                            onSort={handleSalesSort}
+                          />
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {report.sales.map((sale) => (
-                        <tr key={sale.id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 font-medium text-gray-900">
+                      {sortedSales.map((sale) => (
+                        <tr key={sale.id} className="transition-colors hover:bg-gray-50">
+                          <td className="px-4 py-3 font-mono text-sm text-gray-500">
                             {sale.referenceNo}
                           </td>
                           <td className="px-4 py-3 text-gray-700">
@@ -170,7 +390,7 @@ export default function ReportsPage() {
                             {sale.saleItems.length === 1 ? 'item' : 'items'}
                           </td>
                           <td className="px-4 py-3 text-gray-700">
-                            LKR {sale.totalAmount}
+                            {formatLKR(sale.totalAmount)}
                           </td>
                         </tr>
                       ))}
@@ -184,13 +404,17 @@ export default function ReportsPage() {
 
         {/* Inventory Valuation */}
         <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="mb-5 text-base font-semibold text-gray-800">Inventory Valuation</h2>
+          <div className="mb-5 flex items-center justify-between">
+            <h2 className="text-base font-semibold text-gray-800">Inventory Valuation</h2>
+            {!valLoading && !valError && valuation && valuation.products.length > 0 && (
+              <Button variant="outline" size="sm" onClick={handleValuationCSV}>
+                <Download className="mr-1.5 h-3.5 w-3.5" />
+                Download CSV
+              </Button>
+            )}
+          </div>
 
-          {valLoading && (
-            <div className="flex items-center justify-center py-12">
-              <div className="h-7 w-7 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-            </div>
-          )}
+          {valLoading && <TableSkeleton rows={4} cols={4} />}
 
           {valError && (
             <div className="rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -203,36 +427,39 @@ export default function ReportsPage() {
               <div className="rounded-md bg-gray-50 px-4 py-3 text-sm">
                 <span className="text-gray-500">Total Inventory Value:</span>{' '}
                 <span className="font-semibold text-gray-900">
-                  LKR {valuation.totalValue}
+                  {formatLKR(valuation.totalValue)}
                 </span>
               </div>
 
               {valuation.products.length === 0 ? (
-                <p className="py-6 text-center text-sm text-gray-400">
-                  No products in inventory.
-                </p>
+                <div className="py-12 text-center">
+                  <Package className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+                  <p className="font-medium text-gray-500">No products in inventory</p>
+                  <p className="mt-1 text-sm text-gray-400">Add products to see valuation</p>
+                </div>
               ) : (
-                <div className="overflow-hidden rounded-lg border border-gray-200">
+                <div className="overflow-x-auto overflow-y-auto max-h-[600px] rounded-lg border border-gray-200">
                   <table className="min-w-full divide-y divide-gray-200 text-sm">
-                    <thead className="bg-gray-50">
+                    <thead className="sticky top-0 bg-white z-10 border-b border-gray-200">
                       <tr>
-                        {['Product', 'Stock Qty', 'Cost Price (LKR)', 'Value (LKR)'].map((h) => (
-                          <th
-                            key={h}
-                            className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500"
-                          >
-                            {h}
-                          </th>
+                        {VALUATION_HEADERS.map(({ label, key }) => (
+                          <SortableHeader
+                            key={label}
+                            label={label}
+                            sortKey={key}
+                            sortState={valSort}
+                            onSort={handleValSort}
+                          />
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {valuation.products.map((p) => (
-                        <tr key={p.id} className="hover:bg-gray-50">
+                      {sortedValProducts.map((p) => (
+                        <tr key={p.id} className="transition-colors hover:bg-gray-50">
                           <td className="px-4 py-3 font-medium text-gray-900">{p.name}</td>
-                          <td className="px-4 py-3 text-gray-700">{p.stockQty}</td>
-                          <td className="px-4 py-3 text-gray-700">LKR {p.costPrice}</td>
-                          <td className="px-4 py-3 text-gray-700">LKR {p.value}</td>
+                          <td className="px-4 py-3 text-gray-700">{formatQty(p.stockQty)}</td>
+                          <td className="px-4 py-3 text-gray-700">{formatLKR(p.costPrice)}</td>
+                          <td className="px-4 py-3 text-gray-700">{formatLKR(p.value)}</td>
                         </tr>
                       ))}
                     </tbody>

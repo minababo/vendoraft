@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
+import { showSuccess } from '@/lib/utils/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -46,7 +47,6 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
   const [stagingError, setStagingError] = useState('');
   const [submitLoading, setSubmitLoading] = useState(false);
   const [submitError, setSubmitError] = useState('');
-  const [success, setSuccess] = useState('');
 
   useEffect(() => {
     if (open) {
@@ -55,7 +55,6 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
       setStagingQty('1');
       setStagingError('');
       setSubmitError('');
-      setSuccess('');
     }
   }, [open]);
 
@@ -121,11 +120,9 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
       await api.post('/api/sales', {
         items: items.map((i) => ({ productId: i.productId, quantity: i.quantity })),
       });
-      setSuccess('Sale recorded successfully.');
-      setTimeout(() => {
-        onSuccess();
-        onClose();
-      }, 1200);
+      showSuccess('Sale recorded successfully');
+      onSuccess();
+      onClose();
     } catch (err: unknown) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data?.error
@@ -231,17 +228,11 @@ export default function SaleModal({ open, onClose, onSuccess, products }: SaleMo
             </p>
           )}
 
-          {success && (
-            <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
-              {success}
-            </p>
-          )}
-
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="outline" onClick={onClose} disabled={submitLoading}>
               Cancel
             </Button>
-            <Button type="submit" disabled={submitLoading || !!success}>
+            <Button type="submit" disabled={submitLoading}>
               {submitLoading ? 'Recording…' : 'Record Sale'}
             </Button>
           </div>

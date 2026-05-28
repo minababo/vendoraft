@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { protect } from '../middleware/auth';
 
 const router = Router();
@@ -71,7 +71,20 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
   const referenceNo = `VR-${Date.now()}`;
   const totalAmount = resolvedItems.reduce((sum, i) => sum + i.subtotal, 0);
 
+  try {
   const sale = await prisma.$transaction(async (tx) => {
+    // Re-validate stock under serializable isolation — prevents race conditions
+    for (const item of resolvedItems) {
+      const product = await tx.product.findUnique({ where: { id: item.productId } });
+      if (!product || product.stockQty < item.quantity) {
+        throw Object.assign(
+          new Error(`Insufficient stock for ${item.productName}`),
+          { code: 'INSUFFICIENT_STOCK' },
+        );
+      }
+    }
+
+    // Explicit field whitelist — prevents mass assignment
     const createdSale = await tx.sale.create({
       data: {
         referenceNo,
@@ -107,9 +120,15 @@ router.post('/', async (req: Request, res: Response): Promise<void> => {
     }
 
     return createdSale;
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
   res.status(201).json(sale);
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    if (err.code === 'INSUFFICIENT_STOCK') { res.status(400).json({ error: err.message }); return; }
+    if (err.code === 'P2034') { res.status(409).json({ error: 'Conflict with concurrent request, please retry.' }); return; }
+    throw e;
+  }
 });
 
 router.post('/:id/void', async (req: Request, res: Response): Promise<void> => {
@@ -137,6 +156,7 @@ router.post('/:id/void', async (req: Request, res: Response): Promise<void> => {
       include: saleInclude,
     });
 
+
     for (const item of sale.saleItems) {
       await tx.product.update({
         where: { id: item.productId },
@@ -154,7 +174,7 @@ router.post('/:id/void', async (req: Request, res: Response): Promise<void> => {
     }
 
     return voided;
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
   res.status(200).json(updatedSale);
 });

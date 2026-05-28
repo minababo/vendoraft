@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { protect } from '../middleware/auth';
 
 const router = Router();
@@ -20,24 +20,29 @@ router.post('/in', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const product = await prisma.product.findUnique({ where: { id: productId } });
-  if (!product) {
-    res.status(404).json({ error: 'Product not found' });
-    return;
+  try {
+    const movement = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findUnique({ where: { id: productId } });
+      if (!product) throw Object.assign(new Error('Product not found'), { code: 'NOT_FOUND' });
+
+      await tx.product.update({
+        where: { id: productId },
+        data: { stockQty: { increment: quantity } },
+      });
+
+      // Explicit field whitelist — prevents mass assignment
+      return tx.stockMovement.create({
+        data: { productId, quantity, type: 'IN', note: note ?? null },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    res.status(201).json(movement);
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    if (err.code === 'NOT_FOUND') { res.status(404).json({ error: err.message }); return; }
+    if (err.code === 'P2034') { res.status(409).json({ error: 'Conflict with concurrent request, please retry.' }); return; }
+    throw e;
   }
-
-  const movement = await prisma.$transaction(async (tx) => {
-    await tx.product.update({
-      where: { id: productId },
-      data: { stockQty: { increment: quantity } },
-    });
-
-    return tx.stockMovement.create({
-      data: { productId, quantity, type: 'IN', note: note ?? null },
-    });
-  });
-
-  res.status(201).json(movement);
 });
 
 router.post('/out', async (req: Request, res: Response): Promise<void> => {
@@ -53,29 +58,31 @@ router.post('/out', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const product = await prisma.product.findUnique({ where: { id: productId } });
-  if (!product) {
-    res.status(404).json({ error: 'Product not found' });
-    return;
+  try {
+    const movement = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findUnique({ where: { id: productId } });
+      if (!product) throw Object.assign(new Error('Product not found'), { code: 'NOT_FOUND' });
+      if (product.stockQty < quantity) throw Object.assign(new Error('Insufficient stock'), { code: 'INSUFFICIENT_STOCK' });
+
+      await tx.product.update({
+        where: { id: productId },
+        data: { stockQty: { decrement: quantity } },
+      });
+
+      // Explicit field whitelist — prevents mass assignment
+      return tx.stockMovement.create({
+        data: { productId, quantity, type: 'OUT', note: note ?? null },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    res.status(201).json(movement);
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    if (err.code === 'NOT_FOUND') { res.status(404).json({ error: err.message }); return; }
+    if (err.code === 'INSUFFICIENT_STOCK') { res.status(400).json({ error: err.message }); return; }
+    if (err.code === 'P2034') { res.status(409).json({ error: 'Conflict with concurrent request, please retry.' }); return; }
+    throw e;
   }
-
-  if (product.stockQty < quantity) {
-    res.status(400).json({ error: 'Insufficient stock' });
-    return;
-  }
-
-  const movement = await prisma.$transaction(async (tx) => {
-    await tx.product.update({
-      where: { id: productId },
-      data: { stockQty: { decrement: quantity } },
-    });
-
-    return tx.stockMovement.create({
-      data: { productId, quantity, type: 'OUT', note: note ?? null },
-    });
-  });
-
-  res.status(201).json(movement);
 });
 
 router.post('/adjust', async (req: Request, res: Response): Promise<void> => {
@@ -91,31 +98,36 @@ router.post('/adjust', async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  const product = await prisma.product.findUnique({ where: { id: productId } });
-  if (!product) {
-    res.status(404).json({ error: 'Product not found' });
-    return;
+  try {
+    const movement = await prisma.$transaction(async (tx) => {
+      const product = await tx.product.findUnique({ where: { id: productId } });
+      if (!product) throw Object.assign(new Error('Product not found'), { code: 'NOT_FOUND' });
+
+      const delta = newQuantity - product.stockQty;
+
+      await tx.product.update({
+        where: { id: productId },
+        data: { stockQty: newQuantity },
+      });
+
+      // Explicit field whitelist — prevents mass assignment
+      return tx.stockMovement.create({
+        data: {
+          productId,
+          quantity: Math.abs(delta),
+          type: 'ADJUSTMENT',
+          note: note ?? 'Stock adjustment',
+        },
+      });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    res.status(201).json(movement);
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    if (err.code === 'NOT_FOUND') { res.status(404).json({ error: err.message }); return; }
+    if (err.code === 'P2034') { res.status(409).json({ error: 'Conflict with concurrent request, please retry.' }); return; }
+    throw e;
   }
-
-  const delta = newQuantity - product.stockQty;
-
-  const movement = await prisma.$transaction(async (tx) => {
-    await tx.product.update({
-      where: { id: productId },
-      data: { stockQty: newQuantity },
-    });
-
-    return tx.stockMovement.create({
-      data: {
-        productId,
-        quantity: Math.abs(delta),
-        type: 'ADJUSTMENT',
-        note: note ?? 'Stock adjustment',
-      },
-    });
-  });
-
-  res.status(201).json(movement);
 });
 
 router.get('/movements', async (req: Request, res: Response): Promise<void> => {

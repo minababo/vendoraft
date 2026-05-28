@@ -69,6 +69,7 @@ router.put('/change-password', protect, async (req: Request, res: Response): Pro
   }
 
   const newHash = await bcrypt.hash(newPassword, 10);
+  // Explicit field whitelist — prevents mass assignment
   await prisma.user.update({
     where: { id: user.id },
     data: { passwordHash: newHash },

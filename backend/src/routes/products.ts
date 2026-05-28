@@ -96,15 +96,15 @@ router.get('/:id', async (req: Request, res: Response): Promise<void> => {
 });
 
 router.put('/:id', async (req: Request, res: Response): Promise<void> => {
-  const { name, sku, categoryId, price, costPrice, stockQty, lowStockThreshold } = req.body;
+  const { name, sku, categoryId, price, costPrice, lowStockThreshold } = req.body;
 
+  // Explicit field whitelist — prevents mass assignment
   const data: Prisma.ProductUpdateInput = {};
   if (name !== undefined) data.name = name;
   if (sku !== undefined) data.sku = sku;
   if (categoryId !== undefined) data.category = { connect: { id: categoryId } };
   if (price !== undefined) data.price = price;
   if (costPrice !== undefined) data.costPrice = costPrice;
-  if (stockQty !== undefined) data.stockQty = stockQty;
   if (lowStockThreshold !== undefined) data.lowStockThreshold = lowStockThreshold;
 
   try {

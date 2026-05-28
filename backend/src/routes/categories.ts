@@ -41,6 +41,7 @@ router.put('/:id', async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
+    // Explicit field whitelist — prevents mass assignment
     const category = await prisma.category.update({
       where: { id: req.params.id },
       data: { name },
